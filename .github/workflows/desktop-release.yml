@@ -1,48 +1,16 @@
-name: Windows Desktop Release
-
+name: Windows packaging comparison
 on:
-  schedule:
-    - cron: '17,47 * * * *'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Stable upstream tag (empty selects the next version)'
-        type: string
-      publish:
-        description: 'Publish this build to Releases'
-        type: boolean
-        default: false
-
 permissions:
   contents: read
-
-concurrency:
-  group: upstream-desktop-release
-  cancel-in-progress: false
-
 jobs:
-  plan:
-    if: github.repository != 'basketikun/infinite-canvas' && github.ref == 'refs/heads/desktop'
-    runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.release.outputs.tag }}
-      commit: ${{ steps.release.outputs.commit }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - id: release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          UPSTREAM_TAG: ${{ inputs.tag }}
-          PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
-        run: ./.github/desktop/plan-release.ps1 -Tag $env:UPSTREAM_TAG -Publish:($env:PUBLISH -eq 'true')
-
-  windows:
-    needs: plan
-    if: needs.plan.outputs.tag != ''
+  compare:
+    name: ${{ matrix.variant }}
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [upstream-original, pnpm-invocation-only, desktop-fixed]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: basketikun/infinite-canvas
-          ref: ${{ needs.plan.outputs.commit }}
+          ref: d916904c13664d4492c85a2c28f3b4f137187d16
           path: upstream
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -61,64 +29,8 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           package_json_file: upstream/package.json
-      - name: Apply the desktop packaging changes to the release source
-        shell: pwsh
-        run: ./desktop/.github/desktop/apply-packaging.ps1 -Desktop desktop -Source upstream
-      - name: Build installer and portable ZIP
-        shell: pwsh
+      - name: Prepare and compare
         env:
-          UPSTREAM_TAG: ${{ needs.plan.outputs.tag }}
-        run: ./desktop/.github/desktop/build-windows.ps1 -Source upstream -Output release -Tag $env:UPSTREAM_TAG
-      - name: Install, extract and start the artifacts
+          VARIANT: ${{ matrix.variant }}
         shell: pwsh
-        env:
-          UPSTREAM_TAG: ${{ needs.plan.outputs.tag }}
-        run: ./desktop/.github/desktop/smoke-windows.ps1 -Artifacts release -Tag $env:UPSTREAM_TAG
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-release
-          path: release/*
-          if-no-files-found: error
-
-  publish:
-    needs: [plan, windows]
-    if: github.event_name == 'schedule' || inputs.publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-release
-          path: release
-      - name: Publish the assets on the matching tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-          UPSTREAM_TAG: ${{ needs.plan.outputs.tag }}
-          UPSTREAM_COMMIT: ${{ needs.plan.outputs.commit }}
-        run: |
-          git fetch --no-tags https://github.com/basketikun/infinite-canvas.git "refs/tags/$UPSTREAM_TAG"
-          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$UPSTREAM_COMMIT"
-          existing=$(git ls-remote origin "refs/tags/$UPSTREAM_TAG" "refs/tags/$UPSTREAM_TAG^{}" | tail -n 1 | cut -f 1)
-          if [ -n "$existing" ]; then
-            test "$existing" = "$UPSTREAM_COMMIT"
-          else
-            git push origin "FETCH_HEAD:refs/tags/$UPSTREAM_TAG"
-          fi
-          printf '%s\n' \
-            'Windows x64 desktop build for Infinite Canvas. This is a community release.' \
-            '' \
-            "Upstream: https://github.com/basketikun/infinite-canvas/releases/tag/$UPSTREAM_TAG" \
-            "Source commit: $UPSTREAM_COMMIT" \
-            '' \
-            'Run the installer, or extract the portable ZIP and open 无限画布.exe. Both packages are unsigned.' > release-notes.md
-          if draft=$(gh release view "$UPSTREAM_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
-            if [ "$draft" = true ]; then
-              gh release upload "$UPSTREAM_TAG" release/* --clobber
-              gh release edit "$UPSTREAM_TAG" --draft=false
-            fi
-          else
-            gh release create "$UPSTREAM_TAG" release/* --verify-tag \
-              --title "无限画布 Desktop $UPSTREAM_TAG" --notes-file release-notes.md
-          fi
+        run: ./desktop/.github/desktop/compare-windows.ps1 -Variant $env:VARIANT
