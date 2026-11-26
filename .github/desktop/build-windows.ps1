@@ -43,7 +43,21 @@ Copy-Item -LiteralPath (Join-Path $sourcePath 'LICENSE') -Destination (Join-Path
 
 [void][IO.Directory]::CreateDirectory($outputPath)
 [IO.Compression.ZipFile]::CreateFromDirectory($bundlePath, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
-& $Iscc '/Qp' "/DReleaseVersion=$version" "/DReleaseOutput=$outputPath" "/DBundleDir=$bundlePath" (Join-Path $PSScriptRoot 'windows.iss')
+# ISCC can fail on long paths under a deeply nested checkout.
+$staging = [IO.Directory]::CreateTempSubdirectory('ic-package-').FullName
+try {
+    $inputBundle = Join-Path $staging 'app'
+    Copy-Item -LiteralPath $bundlePath -Destination $inputBundle -Recurse
+    & $Iscc '/Qp' "/DReleaseVersion=$version" "/DReleaseOutput=$staging" "/DBundleDir=$inputBundle" (Join-Path $PSScriptRoot 'windows.iss')
+    Copy-Item -LiteralPath (Join-Path $staging (Split-Path -Leaf $setup)) -Destination $setup
+} finally {
+    $resolvedStaging = (Resolve-Path -LiteralPath $staging).Path
+    $tempRoot = (Resolve-Path -LiteralPath ([IO.Path]::GetTempPath())).Path.TrimEnd('\') + '\'
+    if ($resolvedStaging.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -and
+        !((Get-Item -LiteralPath $resolvedStaging).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        Remove-Item -LiteralPath $resolvedStaging -Recurse -Force
+    }
+}
 Get-FileHash -Algorithm SHA256 -LiteralPath $zip,$setup | ForEach-Object {
     '{0}  {1}' -f $_.Hash.ToLowerInvariant(), (Split-Path -Leaf $_.Path)
 } | Set-Content -LiteralPath $hashes -Encoding ascii
