@@ -7,6 +7,12 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 # This commit introduced the upstream desktop build that the patch is based on.
 $base = 'd916904'
-$patch = git -C $Desktop diff --binary $base HEAD -- apps/desktop/build.mjs
-if (!$patch) { throw 'The desktop packaging patch is empty.' }
-$patch | git -C $Source -c core.autocrlf=false apply --3way -
+$patchFile = [IO.Path]::GetTempFileName()
+try {
+    git -C $Desktop diff "--output=$patchFile" --binary $base HEAD -- apps/desktop/build.mjs
+    if (!(Get-Item -LiteralPath $patchFile).Length) { throw 'The desktop packaging patch is empty.' }
+    git -C $Source apply --cached --3way $patchFile
+    git -C $Source checkout-index -f -- apps/desktop/build.mjs
+} finally {
+    Remove-Item -LiteralPath $patchFile
+}

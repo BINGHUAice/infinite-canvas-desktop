@@ -23,6 +23,7 @@ try {
     await packager({
         dir: temporary, out: fileURLToPath(new URL("dist/", import.meta.url)), name: pkg.productName,
         appBundleId: "com.infinitecanvas.desktop", appVersion: version, electronVersion: pkg.devDependencies.electron,
+        win32metadata: { CompanyName: "Infinite Canvas contributors" },
         asar: false, prune: false, overwrite: true,
         afterCopy: [async ({ buildPath, platform }) => {
             const cli = join(buildPath, "cli");
